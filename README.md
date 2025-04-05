@@ -1,4 +1,4 @@
-# fraudsilo
+# FraudSilo
 Multi-database Fraud Protection for WHMCS
 
 ## What Does FraudSilo Do?
