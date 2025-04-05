@@ -1,5 +1,9 @@
 <?php
-
+/* 
+FraudSilo fraud protection module for WHMCS
+https://github.com/sitearrow/fraudsilo/
+v1.0 - released 2025-04-05
+*/
 function fraudsilo_MetaData()
 {
     return array("DisplayName" => "FraudSilo", "SupportsRechecks" => true, "APIVersion" => "1.2");
