@@ -3,7 +3,8 @@ Multi-database Fraud Protection for WHMCS
 
 ## What Does FraudSilo Do?
 FraudSilo allows you to screen new orders against multiple fraud databases at the same time. 
-At the moment, we support:
+
+At the moment, FraudSilo supports:
 * [FraudLabs Pro](http://www.fraudlabspro.com/?ref=20215) - Free plan available for up to 500 orders per month
 * [FraudRecord](https://www.fraudrecord.com/) - Hosting industry database of bad actors
 * [Kickbox](https://kickbox.com) - Check for temporary and dispoable emails, plus email deliverability
