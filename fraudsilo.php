@@ -132,71 +132,102 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
     $failfraud = false;
 
     // --- FraudRecord Check ---
-    if (!empty($params["FraudRecordEnable"]) && !empty($params['FraudRecordApiKey'])) {
-        $namehash = frecordhash(strtolower(str_replace(" ", "", trim($params['clientsdetails']['firstname'] . $params['clientsdetails']['lastname']))));
-        $email = $params['clientsdetails']['email'];
+if (isset($params["FraudRecordEnable"]) && !empty($params['FraudRecordApiKey'])) {
 
-        // Gmail normalization
-        if (strpos($email, "@gmail.com") !== false || strpos($email, "@googlemail.com") !== false) {
-            $emailtemp = $email;
-            if (strpos($emailtemp, "+") !== false) {
-                $emailtemp = substr($emailtemp, 0, strpos($emailtemp, "+"));
-            }
-            $emailtemp = str_replace(".", "", $emailtemp);
-            $email = $emailtemp . "@gmail.com";
+    $namehash = frecordhash(strtolower(str_replace(" ","",trim($params['clientsdetails']['firstname'].$params['clientsdetails']['lastname']))));
+    $email = $params['clientsdetails']['email'];
+
+    // Normalize Gmail address
+    if (strpos($email, "@gmail.com") !== false || strpos($email, "@googlemail.com") !== false) {
+        $emailtemp = $email;
+        if (strpos($email, "+") !== false) {
+            $emailtemp = substr($email, 0, strpos($email, "+"));
         }
+        $email = str_replace(".", "", $emailtemp) . "@gmail.com";
+    }
 
-        $fields = array(
-            '_api' => $params['FraudRecordApiKey'],
-            '_action' => 'query',
-            'name' => $namehash,
-            'email' => frecordhash($email),
-            'ip' => frecordhash($params['ip']),
-        );
+    $fields = [
+        '_api'   => $params['FraudRecordApiKey'],
+        '_action'=> 'query',
+        'name'   => $namehash,
+        'email'  => frecordhash($email),
+        'ip'     => frecordhash($params['ip']),
+    ];
 
-        if (!empty($params['clientsdetails']['telephoneNumber'])) {
-            $fields['phone'] = frecordhash($params['clientsdetails']['telephoneNumber']);
-        }
+    if (!empty($params['clientsdetails']['telephoneNumber'])) {
+        $fields['phone'] = frecordhash($params['clientsdetails']['telephoneNumber']);
+    }
 
-        $address = strtolower(str_replace(" ", "", trim($params['clientsdetails']['address1'] . $params['clientsdetails']['address2'] . $params['clientsdetails']['city'] . $params['clientsdetails']['state'])));
-        if (!empty($address)) {
-            $fields['address'] = frecordhash($address);
-        }
+    $address = strtolower(str_replace(" ", "", trim(
+        $params['clientsdetails']['address1'] .
+        $params['clientsdetails']['address2'] .
+        $params['clientsdetails']['city'] .
+        $params['clientsdetails']['state']
+    )));
+    if (!empty($address)) {
+        $fields['address'] = frecordhash($address);
+    }
 
-        $ch = curl_init("https://www.fraudrecord.com/api");
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $fields);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        $fraudresult = curl_exec($ch);
+    $ch = curl_init("https://www.fraudrecord.com/api/");
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $fields);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+    $fraudresult = curl_exec($ch);
+
+    if (curl_errno($ch)) {
+        logActivity("FraudRecord Check - Connection Error: " . curl_error($ch));
+        curl_close($ch);
+        $responseData['errors'][] = [
+            "title" => "FraudRecord Error",
+            "description" => "Unable to connect to FraudRecord API. Please check your configuration."
+        ];
+    } else {
         curl_close($ch);
 
-        if (curl_errno($ch) || !$fraudresult) {
-            logActivity("FraudRecord Check - Connection Error: " . curl_error($ch));
+        // Check for HTML instead of expected XML
+        if (stripos($fraudresult, '<html') !== false) {
+            logActivity("FraudRecord Check - HTML/Maintenance Response: " . $fraudresult);
             $responseData['errors'][] = [
-                "title" => "FraudRecord Error",
-                "description" => "Unable to connect to FraudRecord API. Please check your configuration."
+                "title" => "FraudRecord Unavailable",
+                "description" => "FraudRecord returned an HTML page instead of an API response. System may be under maintenance."
             ];
-        } elseif (!preg_match("~<report>([0-9.\-a-f]+)</report>~", $fraudresult, $matches)) {
+        }
+        // Check for expected <report> XML tag
+        elseif (!preg_match("~<report>([0-9.\-a-f]+)</report>~", $fraudresult, $matches)) {
             logActivity("FraudRecord Check - Invalid Response: " . $fraudresult . " - " . print_r($fields, 1));
             $responseData['errors'][] = [
                 "title" => "FraudRecord Error",
-                "description" => "Received an invalid response from the FraudRecord API."
+                "description" => "Received a malformed response from the FraudRecord API."
             ];
-        } else {
+        }
+        else {
             $result_exp = explode("-", $matches[1]);
-            $FRriskScore = $result_exp[0];
-            if ((int)$FRriskScore >= (int)$params["FraudRecordRejectScore"]) {
-                $failfraud = true;
-            }
 
-            $responseData['fraudrecord'] = true;
-            $responseData['fraudrecord_score'] = $FRriskScore;
-            $responseData['fraudrecord_count'] = $result_exp[1];
-            $responseData['fraudrecord_reliability'] = $result_exp[2];
-            $responseData['fraudrecord_details'] = $result_exp[3];
+            // Basic sanity check
+            if (isset($result_exp[3]) && strlen($result_exp[3]) == 16) {
+                $FRriskScore = $result_exp[0];
+
+                if ($FRriskScore >= $params["FraudRecordRejectScore"]) {
+                    $failfraud = true;
+                }
+
+                $responseData['fraudrecord'] = true;
+                $responseData['fraudrecord_score'] = $FRriskScore;
+                $responseData['fraudrecord_count'] = $result_exp[1];
+                $responseData['fraudrecord_reliability'] = $result_exp[2];
+                $responseData['fraudrecord_details'] = $result_exp[3];
+            } else {
+                logActivity("FraudRecord Check - Invalid Format: " . $fraudresult);
+                $responseData['errors'][] = [
+                    "title" => "FraudRecord Error",
+                    "description" => "FraudRecord response was incomplete or improperly formatted."
+                ];
+            }
         }
     }
+}
+
 
     // --- Kickbox Check ---
     if (!empty($params["KickboxEnable"]) && !empty($params['KickboxApiKey'])) {
