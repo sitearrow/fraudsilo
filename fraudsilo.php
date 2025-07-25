@@ -186,11 +186,12 @@ if (isset($params["FraudRecordEnable"]) && !empty($params['FraudRecordApiKey']))
         curl_close($ch);
 
         // Check for HTML instead of expected XML
-        if (stripos($fraudresult, '<html') !== false) {
-            logActivity("FraudRecord Check - HTML/Maintenance Response: " . $fraudresult);
+        // If HTML detected, it's not an API response
+        if (stripos($fraudresult, "<html") !== false || $httpCode !== 200) {
+            logActivity("FraudRecord Check - Invalid HTML Response [{$httpCode}]: " . $fraudresult);
             $responseData['errors'][] = [
-                "title" => "FraudRecord Unavailable",
-                "description" => "FraudRecord returned an HTML page instead of an API response. System may be under maintenance."
+                "title" => "FraudRecord Error",
+                "description" => "FraudRecord returned an invalid response (HTML or unexpected content). API may be temporarily unavailable."
             ];
         }
         // Check for expected <report> XML tag
