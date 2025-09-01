@@ -2,7 +2,7 @@
 /* 
 FraudSilo fraud protection module for WHMCS
 https://github.com/sitearrow/fraudsilo/
-v1.0 - released 2025-04-05
+v1.0.1 - released 2025-09-01
 */
 function fraudsilo_MetaData()
 {
@@ -187,8 +187,8 @@ if (isset($params["FraudRecordEnable"]) && !empty($params['FraudRecordApiKey']))
 
         // Check for HTML instead of expected XML
         // If HTML detected, it's not an API response
-        if (stripos($fraudresult, "<html") !== false || $httpCode !== 200) {
-            logActivity("FraudRecord Check - Invalid HTML Response [{$httpCode}]: " . $fraudresult);
+        if (stripos($fraudresult, "<html") !== false) {
+            logActivity("FraudRecord Check - Invalid HTML Response: " . $fraudresult);
             $responseData['errors'][] = [
                 "title" => "FraudRecord Error",
                 "description" => "FraudRecord returned an invalid response (HTML or unexpected content). API may be temporarily unavailable."
