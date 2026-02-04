@@ -399,7 +399,7 @@ ORDER DETAILS:
 - Email: {$email}
 - Company: " . ($company ?: 'Not provided') . "
 - Address: {$address}, {$city}, {$state}, {$country}
-- Phone: " . ($phone ?: 'Not provided') . " (Note: +CC.number format like +1.4019394798 is standard for this system, not suspicious)
+- Phone: " . ($phone ?: 'Not provided') . " (Note: +CC.number format like +1.4019394798 is standard for this system. However, the country code should match the selected billing country)
 - Ordered Domains: " . (empty($orderedDomains) ? 'None' : implode(', ', $orderedDomains)) . "
 - Ordered Products: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "
 
@@ -410,6 +410,7 @@ Analyze for these fraud indicators:
 4. SUSPICIOUS PATTERNS: Single-character names, email username entirely numeric, company name doesn't match other details
 5. PHISHING INDICATORS: Domains mimicking well-known brands with typos or number substitutions
 6. JUNK/GARBAGE ADDRESS: Address contains repeated text, nonsensical strings, copy-paste errors, or text that doesn't form a valid address (e.g., same words repeated multiple times, random characters, city name appearing in street address multiple times)
+7. COUNTRY MISMATCH: Does the phone country code match the selected country? Does the city/address clearly belong to a different country than selected? (e.g., selecting US but city is "MARRAKECH" which is clearly Morocco)
 
 Respond in this exact JSON format:
 {
