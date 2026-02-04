@@ -364,7 +364,7 @@ function fraudsilo_aiCheck(array $params)
     $city = $params['clientsdetails']['city'];
     $state = $params['clientsdetails']['state'];
     $country = $params['clientsdetails']['country'];
-    $phone = $params['clientsdetails']['telephoneNumber'] ?? '';
+    $phone = str_replace('.', '', $params['clientsdetails']['telephoneNumber']) ?? '';
     
     // Get ordered domains/products via WHMCS Internal API
     $orderedProducts = [];
@@ -404,7 +404,7 @@ ORDER DETAILS:
 - Email: {$email}
 - Company: " . ($company ?: 'Not provided') . "
 - Address: {$address}, {$city}, {$state}, {$country}
-- Phone: " . ($phone ?: 'Not provided') . " (Note: +CC.number format like +1.4019394798 is standard for this system. However, the country code should match the selected billing country)
+- Phone: " . ($phone ?: 'Not provided') . "
 - Ordered Services: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "
 
 Analyze for these fraud indicators:
