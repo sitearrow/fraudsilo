@@ -410,7 +410,7 @@ Analyze for these fraud indicators:
 4. SUSPICIOUS PATTERNS: Single-character names, email username entirely numeric, company name doesn't match other details
 5. PHISHING INDICATORS: Domains mimicking well-known brands with typos or number substitutions
 6. JUNK/GARBAGE ADDRESS: Address contains repeated text, nonsensical strings, copy-paste errors, or text that doesn't form a valid address (e.g., same words repeated multiple times, random characters, city name appearing in street address multiple times)
-7. COUNTRY MISMATCH: Does the phone country code match the selected country? Does the city/address clearly belong to a different country than selected? (e.g., selecting US but city is "MARRAKECH" which is clearly Morocco)
+7. COUNTRY MISMATCH: Does the phone country code match the selected country? Does the city/address clearly belong to a different country than selected? (e.g., selecting US but city is 'MARRAKECH' which is clearly Morocco)
 
 Respond in this exact JSON format:
 {
