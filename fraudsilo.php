@@ -367,28 +367,33 @@ function fraudsilo_aiCheck(array $params)
     $phone = $params['clientsdetails']['telephoneNumber'] ?? '';
     
     // Get ordered domains/products via WHMCS Internal API
-    $orderedDomains = [];
     $orderedProducts = [];
-    
     if (!empty($params['order']['id'])) {
-        $orderResult = localAPI('GetOrders', array('id' => $params['order']['id']));
+    $orderResult = localAPI('GetOrders', array('id' => $params['order']['id']));
+    
+    if ($orderResult['result'] === 'success' && !empty($orderResult['orders']['order'][0])) {
+        $orderData = $orderResult['orders']['order'][0];
         
-        if ($orderResult['result'] === 'success' && !empty($orderResult['orders']['order'][0])) {
-            $orderData = $orderResult['orders']['order'][0];
-            
-            // Get domains from order
-            if (!empty($orderData['lineitems']['lineitem'])) {
-                foreach ($orderData['lineitems']['lineitem'] as $item) {
-                    if (!empty($item['domain'])) {
-                        $orderedDomains[] = $item['domain'];
-                    }
-                    if (!empty($item['product'])) {
-                        $orderedProducts[] = $item['product'];
-                    }
+        // Get domains from order
+        if (!empty($orderData['lineitems']['lineitem'])) {
+            foreach ($orderData['lineitems']['lineitem'] as $item) {
+               
+                // Build product description based on type
+                if ($item['type'] === 'domain') {
+                    // Domain item: "Register Domain" or "Transfer Domain"
+                    $productDesc = $item['product'] . ' Domain - ' . $item['domain'];
+                } elseif ($item['type'] === 'product' && !empty($item['product'])) {
+                    // Product item: use product name as-is
+                    $productDesc = $item['product'] . ' - ' . $item['domain'];
+                }
+                
+                if (!empty($productDesc)) {
+                    $orderedProducts[] = $productDesc;
                 }
             }
         }
     }
+}
 
     
     // Build the analysis prompt
@@ -400,8 +405,7 @@ ORDER DETAILS:
 - Company: " . ($company ?: 'Not provided') . "
 - Address: {$address}, {$city}, {$state}, {$country}
 - Phone: " . ($phone ?: 'Not provided') . " (Note: +CC.number format like +1.4019394798 is standard for this system. However, the country code should match the selected billing country)
-- Ordered Domains: " . (empty($orderedDomains) ? 'None' : implode(', ', $orderedDomains)) . "
-- Ordered Products: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "
+- Ordered Services: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "
 
 Analyze for these fraud indicators:
 1. NAME-EMAIL MISMATCH: Does the name match what you'd expect from the email? (e.g., john.smith@email.com should be John Smith, not Jane Doe)
