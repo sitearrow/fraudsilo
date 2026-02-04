@@ -399,7 +399,7 @@ ORDER DETAILS:
 - Email: {$email}
 - Company: " . ($company ?: 'Not provided') . "
 - Address: {$address}, {$city}, {$state}, {$country}
-- Phone: " . ($phone ?: 'Not provided') . "
+- Phone: " . ($phone ?: 'Not provided') . " (Note: +CC.number format like +1.4019394798 is standard for this system, not suspicious)
 - Ordered Domains: " . (empty($orderedDomains) ? 'None' : implode(', ', $orderedDomains)) . "
 - Ordered Products: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "
 
