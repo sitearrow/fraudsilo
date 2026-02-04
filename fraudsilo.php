@@ -409,7 +409,7 @@ ORDER DETAILS:
 
 Analyze for these fraud indicators:
 1. NAME-EMAIL MISMATCH: Does the name match what you'd expect from the email? (e.g., john.smith@email.com should be John Smith, not Jane Doe)
-2. SUSPICIOUS DOMAINS: Are any ordered domains random characters, keyboard patterns, or look like phishing attempts (e.g., paypa1-secure.com, amaz0n-verify.net)?
+2. SUSPICIOUS DOMAINS: Are any ordered domains random characters, keyboard patterns, or look like phishing attempts (e.g., paypa1-secure.com, amaz0n-verify.net)? Immediate red flag and failed fraud check.
 3. FAKE/PLACEHOLDER DATA: Does the data look like test data, keyboard mashing, or obvious fakes?
 4. SUSPICIOUS PATTERNS: Single-character names, email username entirely numeric, company name doesn't match other details
 5. PHISHING INDICATORS: Domains mimicking well-known brands with typos or number substitutions
