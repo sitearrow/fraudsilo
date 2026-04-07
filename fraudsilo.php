@@ -2,8 +2,9 @@
 /* 
 FraudSilo fraud protection module for WHMCS
 https://github.com/sitearrow/fraudsilo/
-v2.0.0 - released 2025-02-03
+v2.0.1 - released 2026-04-07
 New in v2.0: Private blocklist support, AI-powered fraud detection using Claude Haiku
+2.0.1: Provide context from fraud detection services to Claude to improve decision making
 */
 function fraudsilo_MetaData()
 {
@@ -341,9 +342,73 @@ function fraudsilo_checkBlocklist(array $params, array $blocklist)
 }
 
 /**
+ * Build a summary of prior check results for AI consumption
+ */
+function fraudsilo_buildPriorChecksSummary(array $responseData)
+{
+    $sections = [];
+
+    // Blocklist results
+    if (!empty($responseData['blocklist'])) {
+        $bl = "PRIVATE BLOCKLIST: ";
+        if ($responseData['blocklist_blocked']) {
+            $bl .= "BLOCKED. Reasons: " . implode('; ', $responseData['blocklist_reasons']);
+            $rules = array_map(function($r) { return $r['type'] . '=' . $r['value']; }, $responseData['blocklist_matched_rules'] ?? []);
+            if ($rules) {
+                $bl .= ". Matched rules: " . implode('; ', $rules);
+            }
+        } else {
+            $bl .= "Clear (no matches).";
+        }
+        $sections[] = $bl;
+    }
+
+    // FraudRecord results
+    if (!empty($responseData['fraudrecord'])) {
+        $sections[] = "FRAUDRECORD: Risk score {$responseData['fraudrecord_score']}, "
+            . "report count {$responseData['fraudrecord_count']}, "
+            . "reliability {$responseData['fraudrecord_reliability']}.";
+    }
+
+    // Kickbox results
+    if (!empty($responseData['kickbox'])) {
+        $flags = [];
+        if ($responseData['kickbox_disposable']) $flags[] = "disposable email";
+        if ($responseData['kickbox_free']) $flags[] = "free email provider";
+        if ($responseData['kickbox_role']) $flags[] = "role-based address";
+        if ($responseData['kickbox_did_you_mean']) $flags[] = "possible typo (did-you-mean suggestion)";
+        $kb = "KICKBOX: Delivery result '{$responseData['kickbox_result']}' (reason: {$responseData['kickbox_reason']}).";
+        if ($flags) {
+            $kb .= " Flags: " . implode(', ', $flags) . ".";
+        } else {
+            $kb .= " No flags.";
+        }
+        $sections[] = $kb;
+    }
+
+    // FraudLabs Pro results
+    if (!empty($responseData['fraudlabspro'])) {
+        $fl = "FRAUDLABS PRO: Score {$responseData['fraudlabspro_score']}, status '{$responseData['fraudlabspro_status']}'.";
+        $fl .= " IP location: {$responseData['fraudlabspro_ipcity']}, {$responseData['fraudlabspro_ipcountry']}.";
+        $fl .= " IP owner: {$responseData['fraudlabspro_ipowner']}, type: {$responseData['fraudlabspro_iptype']}.";
+        $fl .= " Proxy/VPN: " . ($responseData['fraudlabspro_ipproxy'] ? 'Yes' : 'No') . ".";
+        $fl .= " IP-country match: " . ($responseData['fraudlabspro_ipmatch'] ? 'Yes' : 'No') . ".";
+        $fl .= " IP distance from billing: {$responseData['fraudlabspro_ipdist']} km.";
+        $sections[] = $fl;
+    }
+
+    if (empty($sections)) {
+        return "";
+    }
+
+    return "\n\nPRIOR FRAUD CHECK RESULTS (from other enabled screening services):\n" . implode("\n", $sections)
+        . "\n\nUse these results as additional signals in your analysis. They provide context but make your own independent assessment as well.";
+}
+
+/**
  * Perform AI-powered fraud analysis using Claude Haiku
  */
-function fraudsilo_aiCheck(array $params)
+function fraudsilo_aiCheck(array $params, array $responseData = [])
 {
     $result = [
         'checked' => false,
@@ -395,7 +460,9 @@ function fraudsilo_aiCheck(array $params)
     }
 }
 
-    
+    // Build the prior checks summary
+    $priorChecksSummary = fraudsilo_buildPriorChecksSummary($responseData);
+
     // Build the analysis prompt
     $prompt = "You are a fraud detection analyst for a web hosting company. Analyze this order for potential fraud indicators.
 
@@ -405,7 +472,7 @@ ORDER DETAILS:
 - Company: " . ($company ?: 'Not provided') . "
 - Address: {$address}, {$city}, {$state}, {$country}
 - Phone: " . ($phone ?: 'Not provided') . "
-- Ordered Services: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "
+- Ordered Services: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "{$priorChecksSummary}
 
 Analyze for these fraud indicators:
 1. NAME-EMAIL MISMATCH: Does the name match what you'd expect from the email? (e.g., john.smith@email.com should be John Smith, not Jane Doe)
@@ -415,6 +482,7 @@ Analyze for these fraud indicators:
 5. PHISHING INDICATORS: Domains mimicking well-known brands with typos or number substitutions
 6. JUNK/GARBAGE ADDRESS: Address contains repeated text, nonsensical strings, copy-paste errors, or text that doesn't form a valid address (e.g., same words repeated multiple times, random characters, city name appearing in street address multiple times)
 7. COUNTRY MISMATCH: Does the phone country code match the selected country? Does the city/address clearly belong to a different country than selected? (e.g., selecting US but city is 'MARRAKECH' which is clearly Morocco)
+8. CROSS-CHECK CORRELATION: If prior fraud check results are provided above, factor them into your analysis. High risk scores from FraudRecord or FraudLabs Pro, disposable/undeliverable emails from Kickbox, proxy/VPN usage, IP-country mismatches, or blocklist hits should all increase your suspicion. Conversely, clean results across all services should increase your confidence the order is legitimate.
 
 Respond in this exact JSON format:
 {
@@ -541,32 +609,6 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
                 "title" => "Blocklist Error",
                 "description" => "Unable to load blocklist configuration file."
             ];
-        }
-    }
-
-    // --- AI Fraud Detection Check ---
-    if (!empty($params["AICheckEnable"]) && !empty($params['AIApiKey'])) {
-        $aiResult = fraudsilo_aiCheck($params);
-        
-        $responseData['ai_check'] = true;
-        $responseData['ai_model'] = $params['AIModel'] ?? 'claude-haiku-4-20250414';
-        $responseData['ai_checked'] = $aiResult['checked'];
-        $responseData['ai_flagged'] = $aiResult['flagged'];
-        $responseData['ai_risk_level'] = $aiResult['risk_level'];
-        $responseData['ai_risk_score'] = $aiResult['risk_score'];
-        $responseData['ai_reasons'] = $aiResult['reasons'];
-        $responseData['ai_analysis'] = $aiResult['analysis'];
-        
-        if ($aiResult['error']) {
-            $responseData['errors'][] = [
-                "title" => "AI Check Error",
-                "description" => $aiResult['error']
-            ];
-        }
-        
-        if ($aiResult['flagged'] && !empty($params['AIRejectOnFlag'])) {
-            $failfraud = true;
-            // logActivity("FraudSilo AI Check - Order flagged as " . $aiResult['risk_level'] . " risk: " . $aiResult['analysis']);
         }
     }
 
@@ -755,6 +797,32 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
                 $responseData['fraudlabspro_id'] = $fraudlabsresult['fraudlabspro_id'];
                 $responseData['fraudlabspro_credits'] = $fraudlabsresult['remaining_credits'];
             }
+        }
+    }
+
+    // --- AI Fraud Detection Check (runs last to incorporate all prior results) ---
+    if (!empty($params["AICheckEnable"]) && !empty($params['AIApiKey'])) {
+        $aiResult = fraudsilo_aiCheck($params, $responseData);
+        
+        $responseData['ai_check'] = true;
+        $responseData['ai_model'] = $params['AIModel'] ?? 'claude-haiku-4-20250414';
+        $responseData['ai_checked'] = $aiResult['checked'];
+        $responseData['ai_flagged'] = $aiResult['flagged'];
+        $responseData['ai_risk_level'] = $aiResult['risk_level'];
+        $responseData['ai_risk_score'] = $aiResult['risk_score'];
+        $responseData['ai_reasons'] = $aiResult['reasons'];
+        $responseData['ai_analysis'] = $aiResult['analysis'];
+        
+        if ($aiResult['error']) {
+            $responseData['errors'][] = [
+                "title" => "AI Check Error",
+                "description" => $aiResult['error']
+            ];
+        }
+        
+        if ($aiResult['flagged'] && !empty($params['AIRejectOnFlag'])) {
+            $failfraud = true;
+            // logActivity("FraudSilo AI Check - Order flagged as " . $aiResult['risk_level'] . " risk: " . $aiResult['analysis']);
         }
     }
 
