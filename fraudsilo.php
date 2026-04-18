@@ -2,9 +2,10 @@
 /* 
 FraudSilo fraud protection module for WHMCS
 https://github.com/sitearrow/fraudsilo/
-v2.0.1 - released 2026-04-07
+v2.0.2 - released 2026-04-18
 New in v2.0: Private blocklist support, AI-powered fraud detection using Claude Haiku
 2.0.1: Provide context from fraud detection services to Claude to improve decision making
+2.0.1: Bug fixes and security improvements
 */
 function fraudsilo_MetaData()
 {
@@ -406,6 +407,20 @@ function fraudsilo_buildPriorChecksSummary(array $responseData)
 }
 
 /**
+ * Sanitize a string for safe inclusion in an AI prompt.
+ * Strips control characters and newlines to prevent prompt injection.
+ */
+function fraudsilo_sanitizeForPrompt($value, $maxLength = 200)
+{
+    $value = preg_replace('/[\x00-\x1F\x7F]/u', ' ', $value);
+    $value = trim(preg_replace('/\s+/', ' ', $value));
+    if (strlen($value) > $maxLength) {
+        $value = substr($value, 0, $maxLength);
+    }
+    return $value;
+}
+
+/**
  * Perform AI-powered fraud analysis using Claude Haiku
  */
 function fraudsilo_aiCheck(array $params, array $responseData = [])
@@ -420,16 +435,16 @@ function fraudsilo_aiCheck(array $params, array $responseData = [])
         'error' => null
     ];
 
-    // Gather order data for analysis
-    $firstName = $params['clientsdetails']['firstname'];
-    $lastName = $params['clientsdetails']['lastname'];
-    $email = $params['clientsdetails']['email'];
-    $company = $params['clientsdetails']['companyname'] ?? '';
-    $address = trim($params['clientsdetails']['address1'] . ' ' . ($params['clientsdetails']['address2'] ?? ''));
-    $city = $params['clientsdetails']['city'];
-    $state = $params['clientsdetails']['state'];
-    $country = $params['clientsdetails']['country'];
-    $phone = str_replace('.', '', $params['clientsdetails']['telephoneNumber']) ?? '';
+    // Gather order data for analysis (sanitized to prevent prompt injection)
+    $firstName = fraudsilo_sanitizeForPrompt($params['clientsdetails']['firstname'], 80);
+    $lastName = fraudsilo_sanitizeForPrompt($params['clientsdetails']['lastname'], 80);
+    $email = fraudsilo_sanitizeForPrompt($params['clientsdetails']['email'], 254);
+    $company = fraudsilo_sanitizeForPrompt($params['clientsdetails']['companyname'] ?? '', 120);
+    $address = fraudsilo_sanitizeForPrompt(trim($params['clientsdetails']['address1'] . ' ' . ($params['clientsdetails']['address2'] ?? '')), 200);
+    $city = fraudsilo_sanitizeForPrompt($params['clientsdetails']['city'], 100);
+    $state = fraudsilo_sanitizeForPrompt($params['clientsdetails']['state'], 100);
+    $country = fraudsilo_sanitizeForPrompt($params['clientsdetails']['country'], 10);
+    $phone = fraudsilo_sanitizeForPrompt(str_replace('.', '', $params['clientsdetails']['telephoneNumber']) ?? '', 20);
     
     // Get ordered domains/products via WHMCS Internal API
     $orderedProducts = [];
@@ -453,7 +468,7 @@ function fraudsilo_aiCheck(array $params, array $responseData = [])
                 }
                 
                 if (!empty($productDesc)) {
-                    $orderedProducts[] = $productDesc;
+                    $orderedProducts[] = fraudsilo_sanitizeForPrompt($productDesc, 150);
                 }
             }
         }
@@ -475,7 +490,7 @@ ORDER DETAILS:
 - Ordered Services: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "{$priorChecksSummary}
 
 Analyze for these fraud indicators:
-1. NAME-EMAIL MISMATCH: Does the name match what you'd expect from the email? (e.g., john.smith@email.com should be John Smith, not Jane Doe)
+1. NAME-EMAIL MISMATCH (MANDATORY REJECT): If the email local part contains a recognizable human name (e.g., john.smith@, jane_doe@, mjohnson@), that name MUST match the customer name. If the email contains a clearly different person's name, you MUST set flagged=true and risk_level=critical. This is non-negotiable. Note: emails that are handles, roles, company names, or non-name strings (e.g., info@, support@, techguy99@, coolcat@, acmellc@) do NOT trigger this rule — only emails where you can identify a specific human name that conflicts with the customer name.
 2. SUSPICIOUS DOMAINS: Are any ordered domains random characters, keyboard patterns, or look like phishing attempts (e.g., paypa1-secure.com, amaz0n-verify.net)? Immediate red flag and failed fraud check.
 3. FAKE/PLACEHOLDER DATA: Does the data look like test data, keyboard mashing, or obvious fakes?
 4. SUSPICIOUS PATTERNS: Single-character names, email username entirely numeric, company name doesn't match other details
@@ -493,7 +508,7 @@ Respond in this exact JSON format:
     \"analysis\": \"Brief explanation of findings\"
 }
 
-Be practical - not every mismatch is fraud. Focus on clear indicators. Low risk for normal-looking orders.";
+IMPORTANT: Rule 1 (NAME-EMAIL MISMATCH) is a hard rule — if a clear name mismatch is detected, the order MUST be flagged regardless of how normal everything else looks. For all other indicators, be practical and focus on clear signals. Low risk for normal-looking orders.";
 
 
 
@@ -652,8 +667,9 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
         $ch = curl_init("https://www.fraudrecord.com/api/");
         curl_setopt($ch, CURLOPT_POSTFIELDS, $fields);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
         $fraudresult = curl_exec($ch);
 
         if (curl_errno($ch)) {
@@ -708,12 +724,15 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
     if (!empty($params["KickboxEnable"]) && !empty($params['KickboxApiKey'])) {
         $ch = curl_init("https://api.kickbox.com/v2/verify?email=" . urlencode($params['clientsdetails']['email']) . "&apikey=" . $params['KickboxApiKey']);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErrno = curl_errno($ch);
+        $curlErrorMsg = curl_error($ch);
         curl_close($ch);
 
-        if (curl_errno($ch) || !$response || $httpCode !== 200) {
-            logActivity("Kickbox Check - Connection Error: " . curl_error($ch));
+        if ($curlErrno || !$response || $httpCode !== 200) {
+            logActivity("Kickbox Check - Connection Error: " . $curlErrorMsg);
             $responseData['errors'][] = [
                 "title" => "Kickbox Error",
                 "description" => "Unable to connect to Kickbox API. Please check your configuration."
@@ -764,11 +783,14 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
         $ch = curl_init("https://api.fraudlabspro.com/v2/order/screen");
         curl_setopt($ch, CURLOPT_POSTFIELDS, $orderdata);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
         $fraudlabsdata = curl_exec($ch);
+        $curlErrno = curl_errno($ch);
+        $curlErrorMsg = curl_error($ch);
         curl_close($ch);
 
-        if (curl_errno($ch) || !$fraudlabsdata) {
-            logActivity("FraudLabs Pro Check - Connection Error: " . curl_error($ch));
+        if ($curlErrno || !$fraudlabsdata) {
+            logActivity("FraudLabs Pro Check - Connection Error: " . $curlErrorMsg);
             $responseData['errors'][] = [
                 "title" => "FraudLabs Pro Error",
                 "description" => "Unable to connect to FraudLabs Pro API. Please check your configuration."
