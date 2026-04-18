@@ -8,6 +8,7 @@ At the moment, FraudSilo supports:
 * [FraudLabs Pro](http://www.fraudlabspro.com/?ref=20215) - Free plan available for up to 500 orders per month
 * [FraudRecord](https://www.fraudrecord.com/) - Hosting industry database of bad actors
 * [Kickbox](https://kickbox.com) - Check for temporary and dispoable emails, plus email deliverability
+* [Claude](https://claude.ai/referral/j_c2DJ71gA) - AI powered review of order including data from the other fraud services
 
 ## Install Instructions
 1. Create a folder named /modules/fraud/fraudsilo/ in your WHMCS Installation
