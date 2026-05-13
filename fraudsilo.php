@@ -6,6 +6,7 @@ v2.0.2 - released 2026-04-18
 New in v2.0: Private blocklist support, AI-powered fraud detection using Claude Haiku
 2.0.1: Provide context from fraud detection services to Claude to improve decision making
 2.0.2: Bug fixes and security improvements
+2.0.3: Bug fix for AI prompt
 */
 function fraudsilo_MetaData()
 {
@@ -457,7 +458,8 @@ function fraudsilo_aiCheck(array $params, array $responseData = [])
         // Get domains from order
         if (!empty($orderData['lineitems']['lineitem'])) {
             foreach ($orderData['lineitems']['lineitem'] as $item) {
-               
+                $productDesc = ''; 
+
                 // Build product description based on type
                 if ($item['type'] === 'domain') {
                     // Domain item: "Register Domain" or "Transfer Domain"
