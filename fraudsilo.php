@@ -2,7 +2,7 @@
 /* 
 FraudSilo fraud protection module for WHMCS
 https://github.com/sitearrow/fraudsilo/
-v2.0.2 - released 2026-04-18
+v2.0.3 - released 2026-05-13
 New in v2.0: Private blocklist support, AI-powered fraud detection using Claude Haiku
 2.0.1: Provide context from fraud detection services to Claude to improve decision making
 2.0.2: Bug fixes and security improvements
