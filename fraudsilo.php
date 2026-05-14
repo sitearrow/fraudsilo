@@ -24,14 +24,7 @@ function fraudsilo_getConfigArray()
         "BlocklistEnable" => array(
             "FriendlyName" => "Enable Private Blocklist",
             "Type" => "yesno",
-            "Description" => "Tick to enable checking against your private blocklist (fraudsilo_blocklist.php)"
-        ),
-        "BlocklistPath" => array(
-            "FriendlyName" => "Blocklist File Path",
-            "Type" => "text",
-            "Size" => "60",
-            "Default" => __DIR__ . '/fraudsilo_blocklist.php',
-            "Description" => "Full path to your blocklist configuration file"
+            "Description" => "Tick to enable checking against your private blocklist (fraudsilo_blocklist.json)"
         ),
         "AICheckEnable" => array(
             "FriendlyName" => "Enable AI Fraud Detection",
@@ -162,19 +155,31 @@ function fraudsilo_getConfigArray()
 }
 
 /**
- * Load the private blocklist from the configuration file
+ * Load the private blocklist from a fixed JSON configuration file.
  */
-function fraudsilo_loadBlocklist($path)
+function fraudsilo_loadBlocklist($path = null)
 {
-    if (!file_exists($path)) {
-        logActivity("FraudSilo Blocklist - File not found: " . $path);
+    $defaultPath = __DIR__ . '/fraudsilo_blocklist.json';
+    $path = $path ?: $defaultPath;
+
+    $realPath = realpath($path);
+    $allowedPath = realpath($defaultPath);
+
+    if ($allowedPath === false || $realPath === false || $realPath !== $allowedPath) {
+        logActivity("FraudSilo Blocklist - Invalid blocklist path: " . $path);
         return null;
     }
 
-    $blocklist = include $path;
-    
-    if (!is_array($blocklist)) {
-        logActivity("FraudSilo Blocklist - Invalid format in: " . $path);
+    $contents = file_get_contents($realPath);
+    if ($contents === false) {
+        logActivity("FraudSilo Blocklist - Unable to read: " . $realPath);
+        return null;
+    }
+
+    $blocklist = json_decode($contents, true);
+
+    if (json_last_error() !== JSON_ERROR_NONE || !is_array($blocklist)) {
+        logActivity("FraudSilo Blocklist - Invalid JSON format in: " . $realPath);
         return null;
     }
 
@@ -606,8 +611,7 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
 
     // --- Private Blocklist Check ---
     if (!empty($params["BlocklistEnable"])) {
-        $blocklistPath = $params['BlocklistPath'] ?? __DIR__ . '/fraudsilo_blocklist.php';
-        $blocklist = fraudsilo_loadBlocklist($blocklistPath);
+        $blocklist = fraudsilo_loadBlocklist();
         
         if ($blocklist) {
             $blocklistResult = fraudsilo_checkBlocklist($params, $blocklist);

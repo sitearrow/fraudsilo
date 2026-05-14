@@ -1,0 +1,12 @@
+{
+  "blocked_emails": [],
+  "blocked_email_domains": [],
+  "blocked_names": [],
+  "blocked_names_exact": [],
+  "blocked_ips": [],
+  "blocked_ip_ranges": [],
+  "blocked_phones": [],
+  "blocked_countries": [],
+  "blocked_email_patterns": [],
+  "blocked_name_patterns": []
+}

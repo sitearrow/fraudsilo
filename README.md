@@ -13,13 +13,14 @@ At the moment, FraudSilo supports:
 
 ## Install Instructions
 1. Create a folder named /modules/fraud/fraudsilo/ in your WHMCS Installation
-2. Upload the fraudsilo.php into that folder
+2. Upload `fraudsilo.php` and `fraudsilo_blocklist.json` into that folder
 3. In WHMCS, navigate to: System Settings > Fraud Protection > click Activate under FraudSilo. 
 
 ## Configuration
 * Enable the services that you wish to use (FraudLabs Pro, FraudRecord and Kickbox).
 * Enter your API keys
 * Set your thresholds for which orders will be flagged as Fraud (eg disposable emails, free emails, proxy/VPN IPs, fraud score thresholds)
+* To use the private blocklist, edit `fraudsilo_blocklist.json` in the FraudSilo module folder. The module intentionally loads only this JSON data file and does not execute blocklist configuration as PHP code.
 
 ## Fair Use Notice
 This project is licensed under the GPLv3. Redistribution, commercial usage, and modifications are allowed *only if* the full source code is made available under the same license. Rebranding or reselling without significant contribution is strongly discouraged.
