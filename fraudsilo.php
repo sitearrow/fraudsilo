@@ -2,10 +2,11 @@
 /* 
 FraudSilo fraud protection module for WHMCS
 https://github.com/sitearrow/fraudsilo/
-v2.1.0 - released 2026-06-22
+v2.1.1 - released 2026-06-22
 New in v2.0: Private blocklist support, AI-powered fraud detection using Claude Haiku
 2.0.1: Provide context from fraud detection services to Claude to improve decision making
 2.1.0: Add MaxMind minFraud as an order screening option (alternative to FraudLabs Pro), with results fed to the AI as additional context
+2.1.1: Bugfix to reset $productDesc
 */
 function fraudsilo_MetaData()
 {
@@ -586,7 +587,9 @@ function fraudsilo_aiCheck(array $params, array $responseData = [])
         // Get domains from order
         if (!empty($orderData['lineitems']['lineitem'])) {
             foreach ($orderData['lineitems']['lineitem'] as $item) {
-               
+
+                $productDesc = ''; // Reset each iteration to prevent carry-over from previous line item                                                                                                                                                                                                         
+                
                 // Build product description based on type
                 if ($item['type'] === 'domain') {
                     // Domain item: "Register Domain" or "Transfer Domain"
