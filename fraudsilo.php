@@ -2,11 +2,10 @@
 /* 
 FraudSilo fraud protection module for WHMCS
 https://github.com/sitearrow/fraudsilo/
-v2.0.3 - released 2026-05-13
+v2.1.0 - released 2026-06-22
 New in v2.0: Private blocklist support, AI-powered fraud detection using Claude Haiku
 2.0.1: Provide context from fraud detection services to Claude to improve decision making
-2.0.2: Bug fixes and security improvements
-2.0.3: Bug fix for AI prompt
+2.1.0: Add MaxMind minFraud as an order screening option (alternative to FraudLabs Pro), with results fed to the AI as additional context
 */
 function fraudsilo_MetaData()
 {
@@ -36,20 +35,37 @@ function fraudsilo_getConfigArray()
         "AICheckEnable" => array(
             "FriendlyName" => "Enable AI Fraud Detection",
             "Type" => "yesno",
-            "Description" => "Use Claude Haiku AI to analyze orders for suspicious patterns"
+            "Description" => "Use an AI model to analyze orders for suspicious patterns"
+        ),
+        "AIProvider" => array(
+            "FriendlyName" => "AI Provider",
+            "Type" => "dropdown",
+            "Options" => array(
+                "anthropic" => "Anthropic (Claude)",
+                "openai" => "OpenAI-compatible",
+            ),
+            "Default" => "anthropic",
+            "Description" => "API style to use. 'OpenAI-compatible' works with OpenAI, Azure OpenAI, OpenRouter, Groq, Together, vLLM, llama.cpp and other servers exposing /chat/completions."
         ),
         "AIApiKey" => array(
-            "FriendlyName" => "Anthropic API Key",
+            "FriendlyName" => "AI API Key",
             "Type" => "password",
             "Size" => "60",
-            "Description" => "Your Anthropic API key for Claude"
+            "Description" => "API key for the selected provider (Anthropic key for Claude, or the bearer token for your OpenAI-compatible endpoint)"
+        ),
+        "AIEndpoint" => array(
+            "FriendlyName" => "OpenAI-compatible Base URL",
+            "Type" => "text",
+            "Size" => "60",
+            "Default" => "https://api.openai.com/v1",
+            "Description" => "Base URL for the OpenAI-compatible API (only used when Provider = OpenAI-compatible). '/chat/completions' is appended automatically. e.g. https://api.openai.com/v1, https://openrouter.ai/api/v1"
         ),
         "AIModel" => array(
             "FriendlyName" => "AI Model",
             "Type" => "text",
             "Size" => "40",
             "Default" => "claude-haiku-4-5",
-            "Description" => "Claude model to use (e.g., claude-haiku-4-5, claude-sonnet-4-5)"
+            "Description" => "Model to use. Claude (e.g. claude-haiku-4-5, claude-sonnet-4-5) for Anthropic, or the model id for your OpenAI-compatible endpoint (e.g. gpt-4o-mini)"
         ),
         "AIRejectOnFlag" => array(
             "FriendlyName" => "Auto-reject AI Flagged Orders",
@@ -143,6 +159,45 @@ function fraudsilo_getConfigArray()
             "Type" => "yesno",
             "Description" => "Tick to reject all orders where IP Geolocation Country does not match Customer Country by FraudLabs Pro"
         ),
+        "MaxMindEnable" => array(
+            "FriendlyName" => "Enable MaxMind minFraud Check",
+            "Type" => "yesno",
+            "Description" => "Tick to enable MaxMind minFraud screening for Orders"
+        ),
+        "MaxMindAccountId" => array(
+            "FriendlyName" => "MaxMind Account ID",
+            "Type" => "text",
+            "Size" => "15",
+            "Description" => "Your MaxMind account ID (used as the username for minFraud API authentication)."
+        ),
+        "MaxMindLicenseKey" => array(
+            "FriendlyName" => "MaxMind License Key",
+            "Type" => "password",
+            "Size" => "40",
+            "Description" => "Your MaxMind license key (used as the password for minFraud API authentication)."
+        ),
+        "MaxMindRejectScore" => array(
+            "FriendlyName" => "MaxMind Reject Risk Score Threshold",
+            "Type" => "text",
+            "Size" => "2",
+            "Default" => 70,
+            "Description" => "Reject orders with a minFraud risk score higher than this value (0.01 -> 99)."
+        ),
+        "MaxMindRejectProxy" => array(
+            "FriendlyName" => "Reject All Orders from Proxy/VPN/Tor IPs",
+            "Type" => "yesno",
+            "Description" => "Tick to reject all orders from IP addresses MaxMind identifies as an anonymous proxy, public proxy, anonymous VPN, residential proxy, or Tor exit node"
+        ),
+        "MaxMindRejectDataCenter" => array(
+            "FriendlyName" => "Reject All Orders from Data Center/Hosting Provider IPs",
+            "Type" => "yesno",
+            "Description" => "Tick to reject all orders from IP addresses MaxMind identifies as a hosting provider"
+        ),
+        "MaxMindRejectIPMismatch" => array(
+            "FriendlyName" => "Reject All Orders where IP Geolocation Country does not match Customer Country",
+            "Type" => "yesno",
+            "Description" => "Tick to reject all orders where the IP geolocation country does not match the billing country according to MaxMind"
+        ),
         "ErrorTitle" => array(
             "FriendlyName" => "Error Message - Title",
             "Type" => "text",
@@ -186,29 +241,77 @@ function fraudsilo_loadBlocklist($path)
  */
 function fraudsilo_ipInCidr($ip, $cidr)
 {
-    if (strpos($cidr, '/') === false) {
-        return $ip === $cidr;
+    // Parse the incoming IP to its canonical binary form (works for IPv4 and IPv6).
+    $ipBin = @inet_pton($ip);
+    if ($ipBin === false) {
+        logActivity("FraudSilo Blocklist - Skipped check for unparseable IP: " . $ip);
+        return false;
     }
 
-    list($subnet, $bits) = explode('/', $cidr);
-    $ip = ip2long($ip);
-    $subnet = ip2long($subnet);
-    $mask = -1 << (32 - $bits);
-    $subnet &= $mask;
-    
-    return ($ip & $mask) == $subnet;
+    // No prefix length supplied -> exact match. Compare binary forms so different
+    // textual representations of the same IPv6 address still match.
+    if (strpos($cidr, '/') === false) {
+        $cidrBin = @inet_pton($cidr);
+        if ($cidrBin === false) {
+            logActivity("FraudSilo Blocklist - Skipped invalid blocklist IP entry: " . $cidr);
+            return false;
+        }
+        return $ipBin === $cidrBin;
+    }
+
+    list($subnet, $bits) = explode('/', $cidr, 2);
+    $subnetBin = @inet_pton($subnet);
+    if ($subnetBin === false) {
+        logActivity("FraudSilo Blocklist - Skipped invalid CIDR subnet: " . $cidr);
+        return false;
+    }
+
+    // IP and subnet must be the same family (both 4-byte IPv4 or both 16-byte IPv6).
+    if (strlen($ipBin) !== strlen($subnetBin)) {
+        return false;
+    }
+
+    $bits = (int) $bits;
+    $maxBits = strlen($ipBin) * 8; // 32 for IPv4, 128 for IPv6
+    if ($bits < 0 || $bits > $maxBits) {
+        logActivity("FraudSilo Blocklist - Skipped CIDR with invalid prefix length: " . $cidr);
+        return false;
+    }
+
+    // Build a binary network mask of $bits leading 1-bits.
+    $mask = str_repeat("\xff", intdiv($bits, 8));
+    $remainder = $bits % 8;
+    if ($remainder !== 0) {
+        $mask .= chr((0xff << (8 - $remainder)) & 0xff);
+    }
+    $mask = str_pad($mask, strlen($ipBin), "\x00");
+
+    return ($ipBin & $mask) === ($subnetBin & $mask);
 }
 
 /**
- * Check if an IP is within a range
+ * Check if an IP is within an inclusive range
  */
 function fraudsilo_ipInRange($ip, $start, $end)
 {
-    $ip = ip2long($ip);
-    $start = ip2long($start);
-    $end = ip2long($end);
-    
-    return ($ip >= $start && $ip <= $end);
+    // Binary forms so the comparison works for both IPv4 and IPv6.
+    $ipBin = @inet_pton($ip);
+    $startBin = @inet_pton($start);
+    $endBin = @inet_pton($end);
+
+    if ($ipBin === false || $startBin === false || $endBin === false) {
+        logActivity("FraudSilo Blocklist - Skipped invalid IP range (ip={$ip}, start={$start}, end={$end})");
+        return false;
+    }
+
+    // All three must be the same address family for the comparison to be meaningful.
+    if (strlen($ipBin) !== strlen($startBin) || strlen($ipBin) !== strlen($endBin)) {
+        return false;
+    }
+
+    // strcmp does an unsigned byte-wise (big-endian) comparison of equal-length
+    // binary strings, which is the correct ordering for packed IP addresses.
+    return (strcmp($ipBin, $startBin) >= 0 && strcmp($ipBin, $endBin) <= 0);
 }
 
 /**
@@ -399,6 +502,31 @@ function fraudsilo_buildPriorChecksSummary(array $responseData)
         $sections[] = $fl;
     }
 
+    // MaxMind minFraud results
+    if (!empty($responseData['maxmind'])) {
+        $mm = "MAXMIND MINFRAUD: Risk score {$responseData['maxmind_score']} (0-99)";
+        if ($responseData['maxmind_iprisk'] !== null) {
+            $mm .= ", IP risk {$responseData['maxmind_iprisk']}";
+        }
+        $mm .= ".";
+        $mm .= " IP location: {$responseData['maxmind_ipcity']}, {$responseData['maxmind_ipcountry']}.";
+        $mm .= " IP owner: {$responseData['maxmind_ipowner']}, type: {$responseData['maxmind_iptype']}.";
+        $mm .= " Proxy/VPN/Tor: " . ($responseData['maxmind_ipproxy'] ? 'Yes' : 'No') . ".";
+        $mm .= " Hosting/data center: " . ($responseData['maxmind_iphosting'] ? 'Yes' : 'No') . ".";
+        $mm .= " IP-country match: " . ($responseData['maxmind_ipmatch'] === null ? 'Unknown' : ($responseData['maxmind_ipmatch'] ? 'Yes' : 'No')) . ".";
+        if ($responseData['maxmind_ipdist'] !== null) {
+            $mm .= " IP distance from billing: {$responseData['maxmind_ipdist']} km.";
+        }
+        $emailFlags = [];
+        if ($responseData['maxmind_email_disposable']) $emailFlags[] = "disposable email";
+        if ($responseData['maxmind_email_free']) $emailFlags[] = "free email provider";
+        if ($responseData['maxmind_email_highrisk']) $emailFlags[] = "high-risk email";
+        if ($emailFlags) {
+            $mm .= " Email flags: " . implode(', ', $emailFlags) . ".";
+        }
+        $sections[] = $mm;
+    }
+
     if (empty($sections)) {
         return "";
     }
@@ -458,8 +586,7 @@ function fraudsilo_aiCheck(array $params, array $responseData = [])
         // Get domains from order
         if (!empty($orderData['lineitems']['lineitem'])) {
             foreach ($orderData['lineitems']['lineitem'] as $item) {
-                $productDesc = ''; 
-
+               
                 // Build product description based on type
                 if ($item['type'] === 'domain') {
                     // Domain item: "Register Domain" or "Transfer Domain"
@@ -480,6 +607,11 @@ function fraudsilo_aiCheck(array $params, array $responseData = [])
     // Build the prior checks summary
     $priorChecksSummary = fraudsilo_buildPriorChecksSummary($responseData);
 
+    // Use the full mailing address when one was provided, otherwise fall back to country only
+    $locationLine = ($address !== '')
+        ? "- Address: {$address}, {$city}, {$state}, {$country}"
+        : "- Country: {$country}";
+
     // Build the analysis prompt
     $prompt = "You are a fraud detection analyst for a web hosting company. Analyze this order for potential fraud indicators.
 
@@ -487,7 +619,7 @@ ORDER DETAILS:
 - Customer Name: {$firstName} {$lastName}
 - Email: {$email}
 - Company: " . ($company ?: 'Not provided') . "
-- Address: {$address}, {$city}, {$state}, {$country}
+{$locationLine}
 - Phone: " . ($phone ?: 'Not provided') . "
 - Ordered Services: " . (empty($orderedProducts) ? 'None' : implode(', ', $orderedProducts)) . "{$priorChecksSummary}
 
@@ -499,7 +631,7 @@ Analyze for these fraud indicators:
 5. PHISHING INDICATORS: Domains mimicking well-known brands with typos or number substitutions
 6. JUNK/GARBAGE ADDRESS: Address contains repeated text, nonsensical strings, copy-paste errors, or text that doesn't form a valid address (e.g., same words repeated multiple times, random characters, city name appearing in street address multiple times)
 7. COUNTRY MISMATCH: Does the phone country code match the selected country? Does the city/address clearly belong to a different country than selected? (e.g., selecting US but city is 'MARRAKECH' which is clearly Morocco)
-8. CROSS-CHECK CORRELATION: If prior fraud check results are provided above, factor them into your analysis. High risk scores from FraudRecord or FraudLabs Pro, disposable/undeliverable emails from Kickbox, proxy/VPN usage, IP-country mismatches, or blocklist hits should all increase your suspicion. Conversely, clean results across all services should increase your confidence the order is legitimate.
+8. CROSS-CHECK CORRELATION: If prior fraud check results are provided above, factor them into your analysis. High risk scores from FraudRecord, FraudLabs Pro or MaxMind minFraud, disposable/undeliverable emails from Kickbox, proxy/VPN usage, IP-country mismatches, or blocklist hits should all increase your suspicion. Conversely, clean results across all services should increase your confidence the order is legitimate.
 
 Respond in this exact JSON format:
 {
@@ -514,27 +646,48 @@ IMPORTANT: Rule 1 (NAME-EMAIL MISMATCH) is a hard rule — if a clear name misma
 
 
 
-    // Make API call to Claude
+    // Make API call to the configured AI provider
     $model = $params['AIModel'] ?? 'claude-haiku-4-5';
-    $ch = curl_init('https://api.anthropic.com/v1/messages');
-    
-    $requestBody = json_encode([
-        'model' => $model,
-        'max_tokens' => 500,
-        'messages' => [
-            ['role' => 'user', 'content' => $prompt]
-        ]
-    ]);
+    $provider = $params['AIProvider'] ?? 'anthropic';
 
+    if ($provider === 'openai') {
+        // OpenAI-compatible Chat Completions API
+        $base = rtrim(trim($params['AIEndpoint'] ?? 'https://api.openai.com/v1'), '/');
+        $url = $base . '/chat/completions';
+        $requestBody = json_encode([
+            'model' => $model,
+            'max_tokens' => 500,
+            'messages' => [
+                ['role' => 'user', 'content' => $prompt]
+            ]
+        ]);
+        $headers = [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $params['AIApiKey']
+        ];
+    } else {
+        // Anthropic Messages API
+        $url = 'https://api.anthropic.com/v1/messages';
+        $requestBody = json_encode([
+            'model' => $model,
+            'max_tokens' => 500,
+            'messages' => [
+                ['role' => 'user', 'content' => $prompt]
+            ]
+        ]);
+        $headers = [
+            'Content-Type: application/json',
+            'x-api-key: ' . $params['AIApiKey'],
+            'anthropic-version: 2023-06-01'
+        ];
+    }
+
+    $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => $requestBody,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json',
-            'x-api-key: ' . $params['AIApiKey'],
-            'anthropic-version: 2023-06-01'
-        ],
+        CURLOPT_HTTPHEADER => $headers,
         CURLOPT_TIMEOUT => 30
     ]);
 
@@ -556,16 +709,20 @@ IMPORTANT: Rule 1 (NAME-EMAIL MISMATCH) is a hard rule — if a clear name misma
     }
 
     $responseData = json_decode($response, true);
-    
-    if (!isset($responseData['content'][0]['text'])) {
+
+    // Extract the assistant text from the provider-specific response shape
+    if ($provider === 'openai') {
+        $aiText = $responseData['choices'][0]['message']['content'] ?? null;
+    } else {
+        $aiText = $responseData['content'][0]['text'] ?? null;
+    }
+
+    if ($aiText === null || $aiText === '') {
         logActivity("FraudSilo AI Check - Invalid response format: " . $response);
         $result['error'] = "Invalid response from AI service";
         return $result;
     }
 
-    // Parse the AI response
-    $aiText = $responseData['content'][0]['text'];
-    
     // Extract JSON from response (handle potential markdown code blocks)
     if (preg_match('/\{[\s\S]*\}/', $aiText, $matches)) {
         $aiResult = json_decode($matches[0], true);
@@ -635,13 +792,14 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
         $namehash = frecordhash(strtolower(str_replace(" ", "", trim($params['clientsdetails']['firstname'] . $params['clientsdetails']['lastname']))));
         $email = $params['clientsdetails']['email'];
 
-        // Normalize Gmail address
+        // Normalize Gmail address: dots in the local part are insignificant and
+        // anything after a '+' is a sub-address. Only the local part is touched.
         if (strpos($email, "@gmail.com") !== false || strpos($email, "@googlemail.com") !== false) {
-            $emailtemp = $email;
-            if (strpos($email, "+") !== false) {
-                $emailtemp = substr($email, 0, strpos($email, "+"));
+            $localPart = substr($email, 0, strpos($email, "@"));
+            if (strpos($localPart, "+") !== false) {
+                $localPart = substr($localPart, 0, strpos($localPart, "+"));
             }
-            $email = str_replace(".", "", $emailtemp) . "@gmail.com";
+            $email = str_replace(".", "", $localPart) . "@gmail.com";
         }
 
         $fields = [
@@ -824,6 +982,114 @@ function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
         }
     }
 
+    // --- MaxMind minFraud Check ---
+    if (!empty($params["MaxMindEnable"]) && !empty($params['MaxMindAccountId']) && !empty($params['MaxMindLicenseKey'])) {
+        $model = $params["clientsdetails"]["model"];
+        $currencyCode = ($model instanceof WHMCS\User\Client) ? $model->currencyrel->code : $model->client->currencyrel->code;
+
+        // Build the minFraud Insights request body (only include fields we have).
+        $billing = array(
+            "first_name" => $params["clientsdetails"]["firstname"],
+            "last_name"  => $params["clientsdetails"]["lastname"],
+            "country"    => $params["clientsdetails"]["country"],
+        );
+        if ($params["clientsdetails"]["address1"]) $billing["address"]    = $params["clientsdetails"]["address1"];
+        if ($params["clientsdetails"]["address2"]) $billing["address_2"]  = $params["clientsdetails"]["address2"];
+        if ($params["clientsdetails"]["city"])     $billing["city"]       = $params["clientsdetails"]["city"];
+        if ($params["clientsdetails"]["state"])    $billing["region"]     = $params["clientsdetails"]["state"];
+        if ($params["clientsdetails"]["postcode"]) $billing["postal"]     = $params["clientsdetails"]["postcode"];
+        if ($params["clientsdetails"]["telephoneNumber"]) {
+            $billing["phone_number"] = preg_replace('/[^0-9]/', '', $params["clientsdetails"]["telephoneNumber"]);
+        }
+
+        $minfraudRequest = array(
+            "device"  => array("ip_address" => $params['ip']),
+            "event"   => array(
+                "transaction_id" => substr($params["order"]["order_number"], 0, 255),
+                "type"           => "purchase",
+            ),
+            "email"   => array("address" => $params["clientsdetails"]["email"]),
+            "billing" => $billing,
+            "order"   => array(
+                "amount"   => $params["order"]["amount"],
+                "currency" => $currencyCode,
+            ),
+        );
+
+        $ch = curl_init("https://minfraud.maxmind.com/minfraud/v2.0/insights");
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($minfraudRequest));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array("Content-Type: application/json"));
+        curl_setopt($ch, CURLOPT_USERPWD, $params['MaxMindAccountId'] . ':' . $params['MaxMindLicenseKey']);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        $minfrauddata = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErrno = curl_errno($ch);
+        $curlErrorMsg = curl_error($ch);
+        curl_close($ch);
+
+        if ($curlErrno || !$minfrauddata) {
+            logActivity("MaxMind minFraud Check - Connection Error: " . $curlErrorMsg);
+            $responseData['errors'][] = [
+                "title" => "MaxMind minFraud Error",
+                "description" => "Unable to connect to MaxMind minFraud API. Please check your configuration."
+            ];
+        } elseif ($httpCode !== 200) {
+            logActivity("MaxMind minFraud Check - API Error (HTTP {$httpCode}): " . $minfrauddata);
+            $responseData['errors'][] = [
+                "title" => "MaxMind minFraud Error",
+                "description" => "MaxMind minFraud returned an error (HTTP {$httpCode})."
+            ];
+        } else {
+            $minfraudresult = json_decode($minfrauddata, 1);
+            if (isset($minfraudresult['risk_score'])) {
+                $ipTraits = $minfraudresult['ip_address']['traits'] ?? [];
+
+                // Treat any anonymising network signal as a proxy/VPN flag.
+                $isProxy = !empty($ipTraits['is_anonymous'])
+                    || !empty($ipTraits['is_anonymous_vpn'])
+                    || !empty($ipTraits['is_public_proxy'])
+                    || !empty($ipTraits['is_residential_proxy'])
+                    || !empty($ipTraits['is_tor_exit_node']);
+                $isHosting = !empty($ipTraits['is_hosting_provider']);
+                $isIpCountryMatch = $minfraudresult['billing_address']['is_in_ip_country'] ?? null;
+
+                if ((float)$minfraudresult['risk_score'] >= (float)$params["MaxMindRejectScore"]) $failfraud = true;
+                if (!empty($params['MaxMindRejectProxy']) && $isProxy) $failfraud = true;
+                if (!empty($params['MaxMindRejectDataCenter']) && $isHosting) $failfraud = true;
+                if (!empty($params['MaxMindRejectIPMismatch']) && $isIpCountryMatch === false) $failfraud = true;
+
+                $responseData['maxmind'] = true;
+                $responseData['maxmind_score'] = $minfraudresult['risk_score'];
+                $responseData['maxmind_iprisk'] = $minfraudresult['ip_address']['risk'] ?? null;
+                $responseData['maxmind_ipcity'] = $minfraudresult['ip_address']['city']['names']['en'] ?? '';
+                $responseData['maxmind_ipcountry'] = $minfraudresult['ip_address']['country']['names']['en'] ?? '';
+                $responseData['maxmind_ipcountrycode'] = $minfraudresult['ip_address']['country']['iso_code'] ?? '';
+                $responseData['maxmind_iplat'] = $minfraudresult['ip_address']['location']['latitude'] ?? '';
+                $responseData['maxmind_iplong'] = $minfraudresult['ip_address']['location']['longitude'] ?? '';
+                $responseData['maxmind_ipowner'] = $ipTraits['isp'] ?? ($ipTraits['organization'] ?? '');
+                $responseData['maxmind_ipdomain'] = $ipTraits['domain'] ?? '';
+                $responseData['maxmind_iptype'] = $ipTraits['user_type'] ?? '';
+                $responseData['maxmind_ipproxy'] = $isProxy;
+                $responseData['maxmind_iphosting'] = $isHosting;
+                $responseData['maxmind_ipdist'] = $minfraudresult['billing_address']['distance_to_ip_location'] ?? null;
+                $responseData['maxmind_ipmatch'] = $isIpCountryMatch;
+                $responseData['maxmind_email_free'] = $minfraudresult['email']['is_free'] ?? null;
+                $responseData['maxmind_email_disposable'] = $minfraudresult['email']['is_disposable'] ?? null;
+                $responseData['maxmind_email_highrisk'] = $minfraudresult['email']['is_high_risk'] ?? null;
+                $responseData['maxmind_id'] = $minfraudresult['id'] ?? '';
+                $responseData['maxmind_credits'] = $minfraudresult['queries_remaining'] ?? '';
+            } else {
+                logActivity("MaxMind minFraud Check - Invalid Response: " . $minfrauddata);
+                $responseData['errors'][] = [
+                    "title" => "MaxMind minFraud Error",
+                    "description" => "Received a malformed response from the MaxMind minFraud API."
+                ];
+            }
+        }
+    }
+
     // --- AI Fraud Detection Check (runs last to incorporate all prior results) ---
     if (!empty($params["AICheckEnable"]) && !empty($params['AIApiKey'])) {
         $aiResult = fraudsilo_aiCheck($params, $responseData);
@@ -994,6 +1260,76 @@ function fraudsilo_processResultsForDisplay(array $params)
                 </td>
                 <th style='padding: 8px;'>Credits Remaining</th>
                 <td style='padding: 8px;'>" . htmlspecialchars($responseData['fraudlabspro_credits']) . "</td>
+            </tr>
+        </table>
+        ";
+    }
+
+    // --- MaxMind minFraud Results ---
+    if (isset($responseData['maxmind'])) {
+        $score = htmlspecialchars($responseData['maxmind_score']);
+        $ipRisk = $responseData['maxmind_iprisk'] !== null ? htmlspecialchars($responseData['maxmind_iprisk']) : 'N/A';
+        $ipMatch = $responseData['maxmind_ipmatch'];
+        $ipMatchDisplay = ($ipMatch === null) ? 'Unknown' : ($ipMatch ? 'Yes' : 'No 🚨');
+        $ipDist = $responseData['maxmind_ipdist'] !== null ? htmlspecialchars($responseData['maxmind_ipdist']) : 'N/A';
+
+        $emailFlags = [];
+        if (!empty($responseData['maxmind_email_disposable'])) $emailFlags[] = 'Disposable 🚨';
+        if (!empty($responseData['maxmind_email_free'])) $emailFlags[] = 'Free ⚠️';
+        if (!empty($responseData['maxmind_email_highrisk'])) $emailFlags[] = 'High Risk 🚨';
+        $emailFlagsDisplay = $emailFlags ? implode(', ', $emailFlags) : 'None';
+
+        $output .= "
+        <h4>MaxMind minFraud Results:</h4>
+        <table style='border-collapse: collapse; width: 100%; text-align: left;' class='table'>
+            <tr>
+                <td rowspan='7' style='text-align: center; width: 12%; padding: 8px; vertical-align: top;'>
+                    <div style='font-size: 32px; font-weight: bold;'>" . $score . "</div>
+                    <div style='font-size: 12px;'>Risk Score (0-99)</div><br>
+                    <strong>IP Risk:</strong> " . $ipRisk . "
+                </td>
+                <th style='width: 14%; padding: 8px;'>IP City</th>
+                <td style='width: 30%; padding: 8px;'>" . htmlspecialchars($responseData['maxmind_ipcity']) . "</td>
+                <th style='width: 14%; padding: 8px;'>IP Country</th>
+                <td style='width: 30%; padding: 8px;'>" . htmlspecialchars($responseData['maxmind_ipcountry']) . " (" . htmlspecialchars($responseData['maxmind_ipcountrycode']) . ")</td>
+            </tr>
+            <tr>
+                <th style='padding: 8px;'>IP Location</th>
+                <td style='padding: 8px;'>
+                    <a href='https://www.google.com/maps/place/" . htmlspecialchars($responseData['maxmind_iplat']) . "," . htmlspecialchars($responseData['maxmind_iplong']) . "' target='_blank'>" . htmlspecialchars($responseData['maxmind_iplat']) . ", " . htmlspecialchars($responseData['maxmind_iplong']) . "</a>
+                </td>
+                <th style='padding: 8px;'>IP & Reverse Hostname</th>
+                <td style='padding: 8px;'><a href='https://ipinfo.io/" . htmlspecialchars($responseData['ip']) . "' target='_blank'>" . htmlspecialchars($responseData['ip']) . "</a> (" . htmlspecialchars($responseData['hostname']) . ")</td>
+            </tr>
+            <tr>
+                <th style='padding: 8px;'>IP Owner</th>
+                <td style='padding: 8px;'>" . htmlspecialchars($responseData['maxmind_ipowner']) . "</td>
+                <th style='padding: 8px;'>IP Domain</th>
+                <td style='padding: 8px;'>" . htmlspecialchars($responseData['maxmind_ipdomain']) . "</td>
+            </tr>
+            <tr>
+                <th style='padding: 8px;'>IP User Type</th>
+                <td style='padding: 8px;'>" . htmlspecialchars($responseData['maxmind_iptype']) . "</td>
+                <th style='padding: 8px;'>Proxy/VPN/Tor</th>
+                <td style='padding: 8px;'>" . htmlspecialchars($responseData['maxmind_ipproxy'] ? 'Yes 🚨' : 'No') . "</td>
+            </tr>
+            <tr>
+                <th style='padding: 8px;'>Hosting/Data Center</th>
+                <td style='padding: 8px;'>" . htmlspecialchars($responseData['maxmind_iphosting'] ? 'Yes 🚨' : 'No') . "</td>
+                <th style='padding: 8px;'>IP Country Match</th>
+                <td style='padding: 8px;'>" . $ipMatchDisplay . "</td>
+            </tr>
+            <tr>
+                <th style='padding: 8px;'>IP Distance (km)</th>
+                <td style='padding: 8px;'>" . $ipDist . "</td>
+                <th style='padding: 8px;'>Email Flags</th>
+                <td style='padding: 8px;'>" . htmlspecialchars($emailFlagsDisplay) . "</td>
+            </tr>
+            <tr>
+                <th style='padding: 8px;'>minFraud Request ID</th>
+                <td style='padding: 8px;'>" . htmlspecialchars($responseData['maxmind_id']) . "</td>
+                <th style='padding: 8px;'>Queries Remaining</th>
+                <td style='padding: 8px;'>" . htmlspecialchars($responseData['maxmind_credits']) . "</td>
             </tr>
         </table>
         ";
