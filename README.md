@@ -5,10 +5,13 @@ Multi-database Fraud Protection for WHMCS
 FraudSilo allows you to screen new orders against multiple fraud databases at the same time. 
 
 At the moment, FraudSilo supports:
+* [MaxMind minFraud Insights](https://www.maxmind.com/en/solutions/fraud-prevention/plans-pricing) - The largest provider of fraud insights to eCommerce and hosting providers - Get transaction and IP risk scores plus over 80 data points on IPs, emails, devices, payment cards, and more.
 * [FraudLabs Pro](http://www.fraudlabspro.com/?ref=20215) - Free plan available for up to 500 orders per month
 * [FraudRecord](https://www.fraudrecord.com/) - Hosting industry database of bad actors
 * [Kickbox](https://kickbox.com) - Check for temporary and dispoable emails, plus email deliverability
 * [Claude](https://claude.ai/referral/j_c2DJ71gA) - AI powered review of order including data from the other fraud services
+* [OpenAI](https://platform.openai.com) - AI powered review of order including data from the other fraud services
+* [Baseten](https://baseten.co), [DeepInfra](https://deepinfra.com), etc - OpenAI compatible APIs for open source LLMs including GLM, Kimi, etc - can be used to run the AI powered review of order including data from the other fraud services
 * Private Blocklist - Add your own private blocklist as well
 
 ## Install Instructions
