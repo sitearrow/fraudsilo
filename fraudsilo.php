@@ -16,11 +16,6 @@ function fraudsilo_MetaData()
 function fraudsilo_getConfigArray()
 {
     return array(
-        "Enable" => array(
-            "FriendlyName" => "Enable FraudSilo",
-            "Type" => "yesno",
-            "Description" => "Tick to enable FraudSilo"
-        ),
         "BlocklistEnable" => array(
             "FriendlyName" => "Enable Private Blocklist",
             "Type" => "yesno",
@@ -749,7 +744,7 @@ IMPORTANT: Rule 1 (NAME-EMAIL MISMATCH) is a hard rule — if a clear name misma
     return $result;
 }
 
-function fraudsilo_doFraudCheck(array $params, $checkOnly = false)
+function fraudsilo_doFraudCheck(array $params)
 {
     // Debug: Log incoming params
 //    logActivity("FraudSilo Debug - doFraudCheck called. Params keys: " . implode(', ', array_keys($params)));
